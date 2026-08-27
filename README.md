@@ -9,7 +9,7 @@ When a competitor connects to the server on one of the specified service ports a
 
 The default location for the config file is `/etc/ctf-service.conf` and can be changed by passing the config file path as the first argument of the program.
 
-The file is made of of `[[Service]]` sections, each containing configurations for that specific service.  Keys are:
+The file is made of `[[Service]]` sections, each containing configurations for that specific service.  Keys are:
 
 |Key|Note|
 |---|---|
@@ -59,3 +59,6 @@ addr6 = ::1
 - Other `types` like python
 - Starting UDP services
 - Handling services that want to use two file descriptors, ex. ftp
+- Logging and tracing
+- Config tester
+- Docker container

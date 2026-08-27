@@ -121,7 +121,7 @@ int main(int argc, char **argv){
 
 	struct epoll_event events[MAX_EVENTS];
 
-	signal(SIGCHILD, SIG_IGN);
+	signal(SIGCHLD, SIG_IGN);
 
 	while(1){
 		int ready_fds = epoll_wait(efd, events, MAX_EVENTS, -1);

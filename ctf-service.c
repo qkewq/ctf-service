@@ -81,9 +81,13 @@ int socket_epoll_add(config_t *config, int efd){ // Fatal exits dont worry about
 	return 0;
 }
 
-int main(){
+int main(int argc, char **argv){
 	config_t *configs = NULL;
-	int num_configs = parse_configs(DEFAULT_CONFIG_FILE, &configs);
+	char *config_file = DEFAULT_CONFIG_FILE;
+	if(argc > 1){
+		config_file = argv[1];
+	}
+	int num_configs = parse_configs(config_file, &configs);
 	if(num_configs == -1){
 		printf("Encountered fatal error while parsing config file\n");
 		return 1;

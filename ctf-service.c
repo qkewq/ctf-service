@@ -8,20 +8,22 @@
 #include <errno.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
+#include <signal.h>
 
 #include "configs.h"
 
 #define MAX_EVENTS 128
+#define FD_CHAR_SIZE 24
 
-typedef struct epoll_data_t{
+typedef struct ep_data_t{
 	struct config_t *config;
 	int fd;
-} epoll_data_t;
+} ep_data_t;
 
 int socket_epoll_add(config_t *config, int efd){ // Fatal exits dont worry about mem or fds
 	address_t *current = config->addr;
 	while(current){
-		epoll_data_t *data = calloc(1, sizeof(epoll_data_t));
+		ep_data_t *data = calloc(1, sizeof(ep_data_t));
 		if(!data){
 			return -1;
 		}
@@ -39,7 +41,7 @@ int socket_epoll_add(config_t *config, int efd){ // Fatal exits dont worry about
 		}
 
 		int optval = 1;
-		if(setsockopt(sfd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval)) == -1){
+		if(setsockopt(data->fd, SOL_SOCKET, SO_REUSEPORT, &optval, sizeof(optval)) == -1){
 			printf("Error setting socket SO_REUSEPORT\n");
 			return -1;
 		}
@@ -54,7 +56,7 @@ int socket_epoll_add(config_t *config, int efd){ // Fatal exits dont worry about
 			return -1;
 		}
 
-		if(bind(data->fd, (sockaddr *)&current->addr, current->addr_len) == -1){
+		if(bind(data->fd, (struct sockaddr *)&current->addr, current->addr_len) == -1){
 			printf("Error binding socket\n");
 			return -1;
 		}
@@ -65,13 +67,15 @@ int socket_epoll_add(config_t *config, int efd){ // Fatal exits dont worry about
 		}
 
 		struct epoll_event event = {0};
-		event.events |= EPOLL_IN;
+		event.events |= EPOLLIN;
 		event.data.ptr = data;
 
 		if(epoll_ctl(efd, EPOLL_CTL_ADD, data->fd, &event) == -1){
 			printf("Error adding file descriptor to epoll - %s\n", strerror(errno));
 			return -1;
 		}
+
+		current = current->next;
 	}
 
 	return 0;
@@ -99,12 +103,12 @@ int main(){
 		return 1;
 	}
 
-	if(fcntl(data->fd, F_SETFL, fcntl(data->fd, F_GETFL, 0) | O_CLOEXEC) == -1){
+	if(fcntl(efd, F_SETFL, fcntl(efd, F_GETFL, 0) | O_CLOEXEC) == -1){
 		printf("Error setting O_CLOEXEC on epoll instance\n");
 		return -1;
 	}
 
-	for(config_t *current = configs; current = current->next; current){
+	for(config_t *current = configs; current; current = current->next){
 		if(socket_epoll_add(current, efd) == -1){
 			printf("Socket creation error exiting...\n");
 			return 1;
@@ -113,6 +117,8 @@ int main(){
 
 	struct epoll_event events[MAX_EVENTS];
 
+	signal(SIGCHILD, SIG_IGN);
+
 	while(1){
 		int ready_fds = epoll_wait(efd, events, MAX_EVENTS, -1);
 		if(ready_fds == -1){
@@ -120,7 +126,7 @@ int main(){
 			continue;
 		}
 		for(int i = 0; i < ready_fds; i++){
-			epoll_data_t *data = events[i].data.ptr;
+			ep_data_t *data = events[i].data.ptr;
 			int cfd = accept(data->fd, NULL, NULL);
 			if(cfd == -1){
 				printf("Accept exited with error - %s\n", strerror(errno));
@@ -138,7 +144,7 @@ int main(){
 				continue;
 			}
 			else{
-				char fd_arg[sizeof(int) + 1] = {0};
+				char fd_arg[FD_CHAR_SIZE] = {0};
 				snprintf(fd_arg, sizeof(fd_arg), "%d", cfd);
 				if(execl(data->config->filepath, data->config->name, fd_arg, (char *)NULL) == -1){
 					printf("Exec exitted with error - %s\n", strerror(errno));

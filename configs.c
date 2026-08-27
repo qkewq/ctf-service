@@ -31,12 +31,15 @@ LINE *lopen(char *filepath, char *mode){
 	line->file = fopen(filepath, mode);
 	if(!line->file){
 		free(line);
+		printf("Error opening file - %s\n", strerror(errno));
 		return NULL;
 	}
 
 	memset(line->line, 0, MAX_LINE_SIZE);
 	line->line_num = 0;
 	line->index = 0;
+
+	return line;
 }
 
 int lclose(LINE *line){
@@ -124,8 +127,10 @@ int is_comment(LINE *line){
 }
 
 int is_alpha(LINE *line){
-	if(lpeekc(line) >= 'a' || lpeekc(line) <= 'z' ||
-       lpeekc(line) >= 'A' || lpeekc(line) <= 'Z'){
+	if(lpeekc(line) >= 'a' && lpeekc(line) <= 'z' ||
+       lpeekc(line) >= 'A' && lpeekc(line) <= 'Z' ||
+	   lpeekc(line) >= '0' && lpeekc(line) <= '9' ||
+       lpeekc(line) == '/'){
 		return 1;
 	   }
 
@@ -160,7 +165,10 @@ int lgetl(LINE *line){
 int lget_addr(LINE *line, char *buffer, size_t buffer_size){
 	int i = 0;
 	for(i; i < buffer_size; i++){
-		if(!is_alpha(line) && lpeekc(line) < '0' && lpeekc(line) > '9' && lpeekc(line) != '.' && lpeekc(line) != ':'){
+		if(!(lpeekc(line) >= '0' && lpeekc(line) <= '9' ||
+	       lpeekc(line) >= 'A' && lpeekc(line) <= 'F' ||
+		   lpeekc(line) >= 'a' && lpeekc(line) <= 'f' ||
+		   lpeekc(line) == '.' || lpeekc(line) == ':')){
 			buffer[i] = '\0';
 			return i;
 		}
@@ -180,6 +188,7 @@ int is_section(LINE *line){
 		lerror_exp(line, '[', lpeekc(line));
 		return 1;
 	}
+	lgetc(line);
 
 	skip_whitespace(line);
 
@@ -200,6 +209,7 @@ int is_section(LINE *line){
 	if(lpeekc(line) != ']'){
 		lerror_exp(line, ']', lpeekc(line));
 	}
+	lgetc(line);
 
 	return 1;
 }
@@ -209,14 +219,22 @@ int link_addr(LINE *line, config_t *configs, char *val, int family){
 	if(!addr){
 		return -1;
 	}
-	int pton_ret = inet_pton(family, val, &addr->addr);
+
+	int pton_ret = -1;
+	if(family == AF_INET){
+		pton_ret = inet_pton(family, val, &((struct sockaddr_in *)&addr->addr)->sin_addr);
+	}
+	else{
+		pton_ret = inet_pton(family, val, &((struct sockaddr_in6 *)&addr->addr)->sin6_addr);
+	}
+
 	if(pton_ret == -1){
-		printf("Error in line %d - Invalid family", line->line_num);
+		printf("Error in line %d - Invalid family\n", line->line_num);
 		free(addr);
 		return 0;
 	}
 	else if(pton_ret == 0){
-		printf("Error in line %d - Invalid address", line->line_num);
+		printf("Error in line %d - Invalid address\n", line->line_num);
 		free(addr);
 		return 0;
 	}
@@ -233,6 +251,32 @@ int link_addr(LINE *line, config_t *configs, char *val, int family){
 	configs->addr = addr;
 
 	return 1;
+}
+
+int link_ports(config_t *configs){
+	while(configs){
+		if(!(configs->present_configs & PST_PORT) || !(configs->present_configs & PST_ADDR)){
+			configs = configs->next;
+			continue;
+		}
+		address_t *current = configs->addr;
+		while(current){
+			if(current->family == AF_INET){
+				struct sockaddr_in *sin = (struct sockaddr_in *)&current->addr;
+				sin->sin_port = htons(configs->port);
+				sin->sin_family = AF_INET;
+			}
+			else{
+				struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)&current->addr;
+				sin6->sin6_port = htons(configs->port);
+				sin6->sin6_family = AF_INET6;
+			}
+			current = current->next;
+		}
+		configs = configs->next;
+	}
+
+	return 0;
 }
 
 int parse_kv(LINE *line, config_t *configs){
@@ -285,7 +329,7 @@ int parse_kv(LINE *line, config_t *configs){
 		configs->present_configs |= PST_PATH;
 	}
 	else if(strcmp(key, "type") == 0){
-		if(strcmp(val, "exectuable") == 0){
+		if(strcmp(val, "executable") == 0){
 			configs->type = EXECUTABLE;
 			configs->present_configs |= PST_TYPE;
 		}
@@ -334,6 +378,9 @@ int parse_configs(char *config_file, config_t **return_pointer){
 	config_errors = 0;
 
 	LINE *line = lopen(config_file, "r");
+	if(!line){
+		return -1;
+	}
 	config_t *configs = NULL;
 	int num_configs = 0;
 
@@ -345,8 +392,13 @@ int parse_configs(char *config_file, config_t **return_pointer){
 
 		if(is_section(line)){
 			config_t *new_config = calloc(1, sizeof(config_t));
+			if(!new_config){
+				return -1;
+			}
 			new_config->next = configs;
 			configs = new_config;
+			num_configs++;
+			continue;
 		}
 
 		if(parse_kv(line, configs) == -1){
@@ -365,6 +417,8 @@ int parse_configs(char *config_file, config_t **return_pointer){
 		config_errors++;
 		return -1;
 	}
+
+	link_ports(configs);
 
 	lclose(line);
 	*return_pointer = configs;
